@@ -196,7 +196,7 @@ if __name__ == "__main__":
     dashboard_url = os.getenv("METABASE_DASHBOARD_URL")
 
     if not email or not password:
-        raise ValueError("No estan las variables de entorno METABASE_EMAIL y METABASE_PASSWORD")
+        raise ValueError("No estan las variables de entorno en el sistema")
     exporter = MetabaseDashboardExporter(
         email=email,
         password=password,
