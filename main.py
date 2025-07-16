@@ -8,7 +8,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
+from docx import Document
+from docx.shared import Inches
 
 # Iniciar sesion en Metabase
 # Capturar imagenes de los graficos que estan en el dashboard
@@ -160,12 +161,27 @@ class MetabaseDashboardExporter:
         except Exception as e:
             print(f"Error creando ZIP: {e}")
 
+    def export_to_word(self, doc_name="dashboard.docx"):
+        doc = Document()
+        # self.output_dir = screenshots
+        for filename in sorted(os.listdir(self.output_dir)):
+            if filename.endswith(".png"):
+
+                img_path = os.path.join(self.output_dir, filename)
+                doc.add_paragraph(filename.replace(".png", ""))
+                doc.add_picture(img_path, width=Inches(8))
+                # Aca se puede poner texto que haya sido analizado con la API de Gemini
+                #doc.add_page_break()
+        doc.save(doc_name)
+        print(f"Word generado: {doc_name}")
+
     def run(self):
         #Ejecuta todo el proceso completo de login, captura y compresion
         try:
             self.login()
             self.capture_dashboard()
             self.zip_screenshots()
+            self.export_to_word()
         except Exception as e:
             print(f"Error general: {e}")
         finally:
@@ -184,6 +200,7 @@ if __name__ == "__main__":
     exporter = MetabaseDashboardExporter(
         email=email,
         password=password,
-        dashboard_url=dashboard_url
+        dashboard_url=dashboard_url,
+        base_url=base_url
     )
     exporter.run()
