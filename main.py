@@ -11,6 +11,7 @@ from docx import Document
 from docx.shared import Inches
 import google.generativeai as genai
 from PIL import Image
+from google.api_core.exceptions import ResourceExhausted
 
 class MetabaseDashboardExtract:
     def __init__(self, email, password, base_url, output_dir="screenshots"):
@@ -26,7 +27,7 @@ class MetabaseDashboardExtract:
 
         prefs = {
             "profile.default_content_setting_values.notifications": 2,
-            "profile.default_content_settings.popups": 0 
+            "profile.default_content_settings.popups": 0
         }
         chrome_options.add_experimental_option("prefs", prefs)
 
@@ -109,6 +110,7 @@ class MetabaseDashboardExtract:
             except Exception as e:
                 print(f"Error capturando gráfico {i+1}: {e}")
                 continue
+    
     @staticmethod
     def get_image_description_from_gemini(image_paths, prompt):
         pil_images = []
@@ -116,15 +118,19 @@ class MetabaseDashboardExtract:
             for path in image_paths:
                 img = Image.open(path)
                 pil_images.append(img)
+        except Exception as e:
+            print(f"Error al cargar las imágenes: {e}")
+            return None
         
-            response = model.generate_content([prompt] + pil_images) 
+        try:
+            response = model.generate_content([prompt] + pil_images)
         
             if hasattr(response, 'text'):
                 return response.text
             elif response and response.candidates and response.candidates[0] and hasattr(response.candidates[0], 'text'):
                 return response.candidates[0].text
             else:
-                print(f"  Gemini no devolvió un texto válido para las imágenes.")
+                print(f"Gemini no devolvió un texto válido para las imágenes.")
                 return None
         except Exception as e:
             print(f"Error al procesar las imágenes {', '.join([os.path.basename(p) for p in image_paths])} con Gemini: {e}")
@@ -134,8 +140,6 @@ class MetabaseDashboardExtract:
                 if img:
                     img.close()
                 
-    
-    
     def export_to_docx(self):
         doc_dir = os.path.join(self.output_dir, "docs")
         os.makedirs(doc_dir, exist_ok=True)
@@ -161,15 +165,18 @@ class MetabaseDashboardExtract:
                         img_path = os.path.join(tab_path, file)
                         doc.add_paragraph(os.path.splitext(file)[0])
                         doc.add_picture(img_path, width=Inches(6.0))
-                        try: 
+                        
+                        try:
                             prompt = "Sos un analista de datos. Genera una profesional pero breve para el siguiente gráfico:"
                             description = MetabaseDashboardExtract.get_image_description_from_gemini([img_path], prompt)
                             time.sleep(0.5)
                             if description:
                                 doc.add_paragraph(description.strip())
                             else:
-                                doc.add_paragraph("(No se pudo generar descripción)")
-
+                                doc.add_paragraph("(Fallo la descripción)")
+                        except ResourceExhausted as e:
+                            print(f"Se excedio la cuota de API")
+                            raise
                         except Exception as e:
                             print(f"Error generando descripción para {file}: {e}")
 
@@ -181,8 +188,8 @@ class MetabaseDashboardExtract:
         try:
             self.login()
             #municipios = ["teulada", "benissa", "calpe", "javea", "mijas", "moraira", "platja_de_aro"]
-            #tabs = ["100-vuts-y-casas-rurales", "102-hoteles%2C-hostales-y-campings", "103-datos-de-fuentes-oficiales"]
             municipios = ["teulada"]
+            #tabs = ["100-vuts-y-casas-rurales", "102-hoteles%2C-hostales-y-campings", "103-datos-de-fuentes-oficiales"]
             tabs = ["103-datos-de-fuentes-oficiales"]
 
             for municipio in municipios:
@@ -195,24 +202,25 @@ class MetabaseDashboardExtract:
                         break
 
             self.export_to_docx()
+        except ResourceExhausted as e:
+            print(f"Se excedio la cuota de Gemini")
         except Exception as e:
             print(f"Error general: {e}")
         finally:
             self.driver.quit()
 
 if __name__ == "__main__":
-    
-    
-    
     email = os.getenv("METABASE_EMAIL")
     password = os.getenv("METABASE_PASSWORD")
     base_url = os.getenv("METABASE_BASE_URL")
     api_key = os.getenv("GEMINI_API_KEY")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    if not email or not password:
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    if not email or not password or not api_key or not base_url:
         raise ValueError("No estan las variables de entorno en el sistema")
+        
     exporter = MetabaseDashboardExtract(
         email=email,
         password=password,
