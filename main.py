@@ -7,22 +7,33 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-from docx import Document
+from docx import Document as docx_document
+from docx.shared import Pt, RGBColor
 from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import google.generativeai as genai
-from PIL import Image
+from PIL import Image # Para abrir imagenes (Pillow)
 from google.api_core.exceptions import ResourceExhausted
+from docx2pdf import convert
+from spire.doc import *
+from spire.doc.common import *
+import subprocess
 
 class MetabaseDashboardExtract:
-    def __init__(self, email, password, base_url, output_dir="screenshots"):
+    # Constructor de clase (se ejecuta automaticamente al crear un objeto)
+    def __init__(self, email, password, base_url, output_dir="output"):
         self.email = email
         self.password = password
         self.base_url = base_url
         self.output_dir = output_dir
 
+        # Comportamiento de Chrome antes de abrirlo
         chrome_options = Options()
+        # Sin interfaz grafica
         chrome_options.add_argument("--headless=new")
+        # Aceleracion por hardware de la GPU (Deshabilitado)
         chrome_options.add_argument("--disable-gpu")
+        # Como esta en headless, le damos una resolucion para que renderice
         chrome_options.add_argument("--window-size=1920,1080")
 
         prefs = {
@@ -58,23 +69,23 @@ class MetabaseDashboardExtract:
             )
         except TimeoutException as e:
             print(f"Error en login: {e}")
-            self.driver.save_screenshot("login_error.png")
             raise
 
     def capture_dashboard(self, dashboard_url, municipio, tab):
+
         print(f"capturando dashboard para {municipio} - {tab}")
 
         self.driver.get(dashboard_url)
         WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="dashcard-container"]')))
         time.sleep(10)
 
-        cards = self.driver.find_elements(By.CSS_SELECTOR, "div.e1b2cizt1.emotion-7apfzl.e1i0sdme0")
+        
+        cards = self.driver.find_elements(By.CSS_SELECTOR, "div.elbzci2t1.emotion-7apf2f1.e1isodme0")
         viz_cards = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="visualization-root"]')
         all_cards = cards + viz_cards
 
         if not all_cards:
             print("No se encontraron gráficos.")
-            self.driver.save_screenshot("dashboard_debug.png")
             return
 
 
@@ -150,8 +161,17 @@ class MetabaseDashboardExtract:
             if not os.path.isdir(municipio_path):
                 continue
 
-            doc = Document()
-            doc.add_heading(municipio, level=0)
+            doc = docx_document()
+            # Titulo
+            title = doc.add_heading(f"Informe de {municipio.capitalize()}", level=0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = title.add_run()
+            run.bold = True
+            run.underline = True
+            run.font.name = 'Arial'
+            run.font.size = Pt(30)
+
+
 
             for tab in sorted(os.listdir(municipio_path)):
                 tab_path = os.path.join(municipio_path, tab)
@@ -163,7 +183,8 @@ class MetabaseDashboardExtract:
                 for file in sorted(os.listdir(tab_path)):
                     if file.endswith(".png"):
                         img_path = os.path.join(tab_path, file)
-                        doc.add_paragraph(os.path.splitext(file)[0])
+
+                        #doc.add_paragraph(os.path.splitext(file)[0])
                         doc.add_picture(img_path, width=Inches(6.0))
                         
                         try:
@@ -184,13 +205,38 @@ class MetabaseDashboardExtract:
             output_path = os.path.join(doc_dir, f"{safe_municipio}.docx")
             doc.save(output_path)
 
+    
+
+
+    def docx_to_pdf(self):
+        input_path = "output/docs/teulada.docx"
+        output_dir = "output/pdf"
+
+        # Asegurarse que la carpeta de salida exista
+        os.makedirs(output_dir, exist_ok=True)
+
+        try:
+            subprocess.run([
+                "D:/Programas/LibreOffice/program/soffice.exe",       
+                "--headless",           # sin interfaz gráfica
+                "--convert-to", "pdf",  # formato de salida
+                "--outdir", output_dir, # carpeta destino
+                input_path
+            ], check=True)
+
+            print("todo ok")
+        except subprocess.CalledProcessError as e:
+            print(f"error libreoffice: {e}")
+
+    
     def run(self):
+        inicio = time.time()
         try:
             self.login()
             #municipios = ["teulada", "benissa", "calpe", "javea", "mijas", "moraira", "platja_de_aro"]
             municipios = ["teulada"]
             #tabs = ["100-vuts-y-casas-rurales", "102-hoteles%2C-hostales-y-campings", "103-datos-de-fuentes-oficiales"]
-            tabs = ["103-datos-de-fuentes-oficiales"]
+            tabs = ["100-vuts-y-casas-rurales"]
 
             for municipio in municipios:
                 for tab in tabs:
@@ -202,12 +248,18 @@ class MetabaseDashboardExtract:
                         break
 
             self.export_to_docx()
+            self.docx_to_pdf()
+            pdf_path = os.path.abspath("output/pdf/teulada.pdf")
+            os.startfile(pdf_path)
+
         except ResourceExhausted as e:
             print(f"Se excedio la cuota de Gemini")
         except Exception as e:
             print(f"Error general: {e}")
         finally:
             self.driver.quit()
+        fin = time.time()
+        print(fin-inicio)
 
 if __name__ == "__main__":
     email = os.getenv("METABASE_EMAIL")
