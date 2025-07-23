@@ -1,6 +1,12 @@
 import os
 import time
 import re
+import subprocess
+import shutil
+
+from PIL import Image
+import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -8,20 +14,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from docx import Document as docx_document
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.section import WD_SECTION_START, WD_ORIENT
 from docx.enum.table import WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-import google.generativeai as genai
-from PIL import Image 
-from google.api_core.exceptions import ResourceExhausted
 
 
-import subprocess
-import shutil
 class MetabaseDashboardExtract:
     def __init__(self, email, password, base_url, output_dir="output"):
         self.email = email
