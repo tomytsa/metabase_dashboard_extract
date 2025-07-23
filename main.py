@@ -11,29 +11,31 @@ from docx import Document as docx_document
 from docx.shared import Pt, RGBColor
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.section import WD_SECTION_START, WD_ORIENT
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 import google.generativeai as genai
-from PIL import Image # Para abrir imagenes (Pillow)
+from PIL import Image 
 from google.api_core.exceptions import ResourceExhausted
-from docx2pdf import convert
-from spire.doc import *
-from spire.doc.common import *
-import subprocess
 
+
+import subprocess
+import shutil
 class MetabaseDashboardExtract:
-    # Constructor de clase (se ejecuta automaticamente al crear un objeto)
     def __init__(self, email, password, base_url, output_dir="output"):
         self.email = email
         self.password = password
         self.base_url = base_url
         self.output_dir = output_dir
 
-        # Comportamiento de Chrome antes de abrirlo
+        
         chrome_options = Options()
-        # Sin interfaz grafica
+        
         chrome_options.add_argument("--headless=new")
-        # Aceleracion por hardware de la GPU (Deshabilitado)
+        
         chrome_options.add_argument("--disable-gpu")
-        # Como esta en headless, le damos una resolucion para que renderice
+        
         chrome_options.add_argument("--window-size=1920,1080")
 
         prefs = {
@@ -150,8 +152,44 @@ class MetabaseDashboardExtract:
             for img in pil_images:
                 if img:
                     img.close()
-                
-    def export_to_docx(self):
+
+    def select_relevant_images(self, image_folder, question, output_folder=None):
+        relevant_images = []
+        all_files = os.listdir(image_folder)
+        all_images = []
+
+        for file_name in all_files:
+            if file_name.lower().endswith(".png"):
+                all_images.append(file_name)
+
+        if not output_folder:
+            output_folder = os.path.join(image_folder, "seleccionadas")
+
+        os.makedirs(output_folder, exist_ok=True)
+        
+        for image_file in all_images:
+            image_path = os.path.join(image_folder, image_file)
+
+            prompt = (
+                f"La siguiente imagen representa un gráfico extraído de datos turísticos. "
+                f"El usuario hizo esta pregunta: \"{question}\".\n"
+                f"¿Esta visualización es útil o relevante para responder a esa consulta? "
+                f"Respondé exclusivamente con una sola palabra: True o False. "
+            )
+
+            try:
+                response = self.get_image_description_from_gemini([image_path], prompt)
+                print(f"{image_file}: {response}")
+                if response and "true" in response.lower():
+                    shutil.copy(image_path, output_folder)
+                    relevant_images.append(image_path)
+            except Exception as e:
+                print(f"Error evaluando relevancia de {image_file}: {e}")
+
+        return relevant_images
+    
+    def export_to_docx(self, question, logo_path=None):
+        
         doc_dir = os.path.join(self.output_dir, "docs")
         os.makedirs(doc_dir, exist_ok=True)
 
@@ -162,37 +200,121 @@ class MetabaseDashboardExtract:
                 continue
 
             doc = docx_document()
+
+            doc.styles['Normal'].font.name = 'Calibri'
+            doc.styles['Normal'].font.size = Pt(12)
+
             # Titulo
-            title = doc.add_heading(f"Informe de {municipio.capitalize()}", level=0)
-            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = title.add_run()
-            run.bold = True
-            run.underline = True
-            run.font.name = 'Arial'
-            run.font.size = Pt(30)
+            title_para = doc.add_paragraph()
+            title_run = title_para.add_run(f"Informe de {municipio.capitalize()}\n")
+            title_run.font.name = 'Calibri'
+            title_run.font.size = Pt(32)
+            title_run.bold = True
+            title_run.underline = True
+            title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
 
 
+            # Preambulo
+            preambulo_text = (
+                "Este informe presenta información turística específica del municipio, con el objetivo de responder a la siguiente pregunta clave:\n"
+                f"{question}"
+                "\nPara ello, se han seleccionado y analizado visualizaciones relevantes que permiten identificar tendencias y patrones relacionados. "
+                "El análisis busca proporcionar evidencia clara y útil para la toma de decisiones estratégicas en el ámbito turístico."
+            )
+            preambulo_para = doc.add_paragraph()
+            preambulo_run = preambulo_para.add_run(preambulo_text)
+            preambulo_run.font.name = 'Calibri'
+            preambulo_run.font.size = Pt(12)
+            preambulo_para.paragraph_format.space_after = Pt(6)
 
-            for tab in sorted(os.listdir(municipio_path)):
+
+            ## Footer para la primera sección
+            section = doc.sections[0]
+            section.footer.is_linked_to_previous = False 
+
+            footer = section.footer
+            footer_table = footer.add_table(rows=1, cols=2, width=Inches(6.5))
+            footer_table.autofit = False
+            footer_table.columns[0].width = Inches(3.25)
+            footer_table.columns[1].width = Inches(3.25)
+
+            # Logo (columna izquierda)
+            logo_cell = footer_table.cell(0, 0)
+            logo_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            if logo_path and os.path.exists(logo_path):
+                try:
+                    logo_run = logo_cell.paragraphs[0].add_run()
+                    logo_run.add_picture(logo_path, width=Inches(0.75))
+                    logo_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+                except Exception as e:
+                    print(f"Error al insertar el logo en el footer: {e}")
+
+            
+
+            # Páginas siguientes por cada tab / sección
+            tabs_list = sorted(os.listdir(municipio_path))
+
+            for tab_index, tab in enumerate(tabs_list):
                 tab_path = os.path.join(municipio_path, tab)
                 if not os.path.isdir(tab_path):
                     continue
+            
+                
+                section_title_text = tab.replace("-", " ").replace("100", "").replace("102", "").replace("103", "").strip().title()
+                if "vuts" in section_title_text.lower():
+                    section_title_text = "Casas rurales y viviendas de uso turístico"
+                elif "hoteles" in section_title_text.lower():
+                    section_title_text = "Hoteles, hostales y campings"
+                elif "oficiales" in section_title_text.lower():
+                    section_title_text = "Datos de fuentes oficiales"
 
-                doc.add_heading(f"Tab {tab}", level=1)
+                section_heading = doc.add_paragraph()
+                section_heading_run = section_heading.add_run(section_title_text) 
+                section_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                section_heading.paragraph_format.space_after = Pt(16)
+                section_heading_run.bold = True
 
-                for file in sorted(os.listdir(tab_path)):
-                    if file.endswith(".png"):
-                        img_path = os.path.join(tab_path, file)
+                selected_imgs = self.select_relevant_images(tab_path, question)
+                for img_path in selected_imgs:
+                        file = os.path.basename(img_path)
 
-                        #doc.add_paragraph(os.path.splitext(file)[0])
-                        doc.add_picture(img_path, width=Inches(6.0))
+
+                        graph_title_para = doc.add_paragraph()
+                        graph_title_run = graph_title_para.add_run(f"{os.path.splitext(file)[0].replace('_', ' ').title()}")
+                        graph_title_run.font.name = 'Calibri'
+                        graph_title_run.font.size = Pt(13)
+                        graph_title_run.bold = True
+                        graph_title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        graph_title_para.paragraph_format.space_after = Pt(6)
+                        
+
+                        # Image
+                        img_para = doc.add_paragraph()
+                        img_run = img_para.add_run()
+                        img_run.add_picture(img_path, width=Inches(6.0))
+                        img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        img_para.paragraph_format.space_after = Pt(12)
+                        
                         
                         try:
-                            prompt = "Sos un analista de datos. Genera una profesional pero breve para el siguiente gráfico:"
+                           
+                            prompt = (
+                                f"Esta imagen será incluida en un informe de datos turísticos que busca responder la siguiente pregunta:\n"
+                                f"\"{question}\"\n\n"
+                                "Redactá una descripción clara, profesional y enfocada en cómo este gráfico aporta información relevante para responder esa pregunta. "
+                                "No uses listas ni formato especial. Usá lenguaje técnico accesible, en formato de párrafo completo."
+                                )
                             description = MetabaseDashboardExtract.get_image_description_from_gemini([img_path], prompt)
                             time.sleep(0.5)
+
                             if description:
-                                doc.add_paragraph(description.strip())
+                                desc_para = doc.add_paragraph()
+                                desc_run = desc_para.add_run(description.strip())
+                                desc_run.font.size = Pt(12)
+                                desc_run.font.name = 'Calibri'
+                                desc_para.paragraph_format.space_after = Pt(6)
+
                             else:
                                 doc.add_paragraph("(Fallo la descripción)")
                         except ResourceExhausted as e:
@@ -200,10 +322,33 @@ class MetabaseDashboardExtract:
                             raise
                         except Exception as e:
                             print(f"Error generando descripción para {file}: {e}")
+        
+        conclusion_prompt = (
+            f"Basándote en las visualizaciones y datos disponibles, redactá una conclusión profesional y clara que responda a la siguiente pregunta:\n"
+            f"\"{question}\"\n\n"
+            "Usá un tono técnico accesible, sin listas ni formato especial. Que parezca una conclusión escrita por un analista turístico."
+        )
 
-            safe_municipio = municipio.replace(" ", "_").lower()
-            output_path = os.path.join(doc_dir, f"{safe_municipio}.docx")
-            doc.save(output_path)
+        try:
+            conclusion_text = MetabaseDashboardExtract.get_image_description_from_gemini([], conclusion_prompt)
+            if conclusion_text:
+                conclusion_heading = doc.add_paragraph("Conclusión", style='Heading 1')
+                conclusion_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                conclusion_heading.paragraph_format.space_after = Pt(12)
+                    
+                conclusion_para = doc.add_paragraph(conclusion_text.strip())
+                conclusion_para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+            else:
+                doc.add_paragraph("No se pudo generar una conclusión automática.")
+
+        except Exception as e:
+            doc.add_paragraph(f"(Error generando conclusión: {e})")
+
+
+        safe_municipio = municipio.replace(" ", "_").lower()
+        output_path = os.path.join(doc_dir, f"{safe_municipio}.docx")
+        doc.save(output_path)
 
     
 
@@ -212,15 +357,15 @@ class MetabaseDashboardExtract:
         input_path = "output/docs/teulada.docx"
         output_dir = "output/pdf"
 
-        # Asegurarse que la carpeta de salida exista
+        
         os.makedirs(output_dir, exist_ok=True)
 
         try:
             subprocess.run([
                 "D:/Programas/LibreOffice/program/soffice.exe",       
-                "--headless",           # sin interfaz gráfica
-                "--convert-to", "pdf",  # formato de salida
-                "--outdir", output_dir, # carpeta destino
+                "--headless",           
+                "--convert-to", "pdf",  
+                "--outdir", output_dir,
                 input_path
             ], check=True)
 
@@ -238,6 +383,8 @@ class MetabaseDashboardExtract:
             #tabs = ["100-vuts-y-casas-rurales", "102-hoteles%2C-hostales-y-campings", "103-datos-de-fuentes-oficiales"]
             tabs = ["100-vuts-y-casas-rurales"]
 
+            logo_file_path = "logo_municipio.png"
+
             for municipio in municipios:
                 for tab in tabs:
                     dashboard_url = f"https://analytics.peninsula.co/dashboard/32-{municipio}?a%25C3%25B1o=&fecha=&mes=&per%25C3%25ADodo=&poblaci%25C3%25B3n=teulada&poblaci%25C3%25B3n_%28consumo%29=calpe&poblaci%25C3%25B3n_2=benissa&tab={tab}&tipo_de_alojamiento=&tipo_de_establecimiento="
@@ -246,8 +393,8 @@ class MetabaseDashboardExtract:
                     except Exception as e:
                         print(f"ERROR: {municipio} - {tab}: {e}")
                         break
-
-            self.export_to_docx()
+            question = "¿Que tendencia se observa en la antelacion con la que los turistas reservan su alojamiento?"
+            self.export_to_docx(question, logo_path=logo_file_path)
             self.docx_to_pdf()
             pdf_path = os.path.abspath("output/pdf/teulada.pdf")
             os.startfile(pdf_path)
